@@ -678,5 +678,25 @@
       "prompt": "content"
     },
     "folder": "python"
+  },
+  "bbh_dpo": {
+    "file_name": "dpo_bbh_dpo_pairs.json",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
+  },
+  "bbh_gpo": {
+    "file_name": "gpo_bbh_dpo_pairs.json",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
   }
 }
