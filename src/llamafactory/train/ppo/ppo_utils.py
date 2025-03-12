@@ -14,7 +14,7 @@
 
 import json
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional, List
 
 import torch
 from transformers.integrations import is_deepspeed_zero3_enabled
