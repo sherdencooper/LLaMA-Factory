@@ -755,7 +755,7 @@ register_template(
 
 register_template(
     name="deepseek3",
-    format_user=StringFormatter(slots=["<｜User｜>{{content}}<｜Assistant｜>"]),
+    format_user=StringFormatter(slots=["<｜User｜>{{content}}<｜Assistant｜><think>\\n"]),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
 )
 
