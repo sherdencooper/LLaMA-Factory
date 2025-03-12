@@ -678,5 +678,32 @@
       "prompt": "content"
     },
     "folder": "python"
+  },
+  "bbh_dpo": {
+    "file_name": "dpo_bbh_dpo_pairs.json",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
+  },
+  "bbh_gpo_dpo": {
+    "file_name": "gpo_bbh_dpo_pairs.json",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
+  },
+  "bbh_ppo": {
+    "file_name": "ppo_dataset.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations"
+    }
   }
 }

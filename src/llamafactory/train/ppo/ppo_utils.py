@@ -20,7 +20,9 @@ import torch
 from transformers.integrations import is_deepspeed_zero3_enabled
 
 from ...extras.packages import is_requests_available
-
+import importlib.util
+import sys
+import os
 
 if is_requests_available():
     import requests
@@ -38,6 +40,71 @@ def get_rewards_from_server(server_url: str, messages: list[str]) -> list["torch
     response = requests.post(server_url, json=payload, headers=headers)
     rewards = json.loads(response.text)["scores"]
     return torch.Tensor(rewards)
+
+def get_rewards_from_rule(reward_model: str, queries: List[str], responses: List[str], labels: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """
+    Gets reward scores from the rule-based reward model.
+
+    Args:
+        reward_model: Path to the Python file containing the reward function, optionally with function name after colon
+        queries: List of query strings
+        responses: List of response strings
+        labels: Optional tensor of labels
+
+    Returns:
+        Tensor of reward scores
+    """
+    # Extract module path and function name if specified
+    if ":" in reward_model:
+        module_path, func_name = reward_model.split(":", 1)
+    else:
+        module_path = reward_model
+        func_name = "reward"
+
+    # Verify the file exists
+    if not os.path.isfile(module_path):
+        raise FileNotFoundError(f"Module file not found: {module_path}")
+
+    # Extract module name from path
+    module_name = os.path.basename(module_path).replace(".py", "")
+
+    try:
+        # Load the module from the specified path
+        spec = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not create module spec from {module_path}")
+
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+
+        # Check if the reward function exists
+        if not hasattr(module, func_name):
+            raise AttributeError(f"Module {module_name} does not have a {func_name}() function")
+
+        # Call the reward function
+        reward_func = getattr(module, func_name)
+        if labels is not None:
+            rewards = reward_func(queries, responses, labels)
+        else:
+            rewards = reward_func(queries, responses)
+
+        # Convert to tensor if it isn't already
+        if not isinstance(rewards, torch.Tensor):
+            if isinstance(rewards, list):
+                rewards = torch.tensor([[r] for r in rewards], dtype=torch.float)
+            else:
+                rewards = torch.tensor([[rewards]], dtype=torch.float)
+
+        # Ensure the tensor has the right shape [batch_size, 1]
+        if rewards.dim() == 1:
+            rewards = rewards.unsqueeze(-1)
+
+        return rewards
+
+    except Exception as e:
+        # Add more context to the error message
+        raise type(e)(f"{str(e)} - Error loading or calling reward function from {module_path}:{func_name}") from e
 
 
 def replace_model(model: "AutoModelForCausalLMWithValueHead", target: Literal["default", "reward"]) -> None:

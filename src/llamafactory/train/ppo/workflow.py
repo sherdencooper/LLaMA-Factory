@@ -50,7 +50,10 @@ def run_ppo(
 
     # Create reference model and reward model
     ref_model = create_ref_model(model_args, finetuning_args, add_valuehead=True)
-    reward_model = create_reward_model(model, model_args, finetuning_args)
+    if finetuning_args.reward_model_type != "rule":
+        reward_model = create_reward_model(model, model_args, finetuning_args)
+    else:
+        reward_model = finetuning_args.reward_model
 
     # Initialize our Trainer
     ppo_trainer: CustomPPOTrainer = CustomPPOTrainer(

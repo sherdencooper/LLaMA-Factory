@@ -41,7 +41,7 @@ from ...extras import logging
 from ...extras.misc import AverageMeter, count_parameters, get_current_device, get_logits_processor
 from ..callbacks import FixValueHeadModelCallback, SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
-from .ppo_utils import dump_layernorm, get_rewards_from_server, replace_model, restore_layernorm
+from .ppo_utils import dump_layernorm, get_rewards_from_server, replace_model, restore_layernorm, get_rewards_from_rule
 
 
 if TYPE_CHECKING:
@@ -101,6 +101,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             accelerator_kwargs={"step_scheduler_with_optimizer": False},
             log_with=training_args.report_to[0] if training_args.report_to else None,
             project_kwargs={"logging_dir": training_args.logging_dir},
+            remove_unused_columns=training_args.remove_unused_columns,
         )
 
         # Add deepspeed config
@@ -244,7 +245,11 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 mini_batch_queries, mini_batch_responses = self.get_inputs(
                     batch[idx : idx + self.config.mini_batch_size]
                 )
-                mini_batch_rewards = self.get_rewards(mini_batch_queries, mini_batch_responses)
+                if self.config.remove_unused_columns!=True:
+                    mini_batch_labels = batch["labels"][idx : idx + self.config.mini_batch_size]
+                else:
+                    mini_batch_labels = None
+                mini_batch_rewards = self.get_rewards(mini_batch_queries, mini_batch_responses, mini_batch_labels)
                 queries.extend(mini_batch_queries)
                 responses.extend(mini_batch_responses)
                 rewards.extend(mini_batch_rewards)
@@ -375,11 +380,28 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         self,
         queries: list["torch.Tensor"],
         responses: list["torch.Tensor"],
+        labels: Optional["torch.Tensor"] = None,
     ) -> list["torch.Tensor"]:
         r"""Compute scores using given reward model.
 
         Both inputs and outputs are put on CPU.
         """
+        if self.finetuning_args.reward_model_type == "rule":
+            if not isinstance(self.reward_model, str):
+                raise ValueError("For 'rule' reward type, reward_model should be a string path to the Python function")
+            
+            decoded_queries = self.tokenizer.batch_decode(queries, skip_special_tokens=True)
+            decoded_responses = self.tokenizer.batch_decode(responses, skip_special_tokens=True)
+            
+            # Pre-process labels to replace -100 values before decoding
+            labels_for_decode = labels.clone()
+            # Replace -100 with a safe token ID (usually pad token)
+            labels_for_decode[labels_for_decode == -100] = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+            
+            decoded_labels = self.tokenizer.batch_decode(labels_for_decode, skip_special_tokens=True)
+            
+            return get_rewards_from_rule(self.reward_model, decoded_queries, decoded_responses, decoded_labels)
+        
         if self.finetuning_args.reward_model_type == "api":
             token_ids = [torch.cat((q, r), dim=-1).tolist() for q, r in zip(queries, responses)]
             messages = self.tokenizer.batch_decode(token_ids, skip_special_tokens=False)
