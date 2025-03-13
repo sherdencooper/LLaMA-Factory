@@ -202,6 +202,22 @@ class RLHFArguments:
         default="lora",
         metadata={"help": "The type of the reward model in PPO training. Lora model only supports lora training."},
     )
+    gpo_explore_trajectory: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether or not to explore the trajectory in GPO training."},
+    )
+    gpo_explore_num: Optional[int] = field(
+        default=4,
+        metadata={"help": "The number of trajectories to explore in GPO training."},
+    )
+    gpo_max_steps: Optional[int] = field(
+        default=30,
+        metadata={"help": "The maximum number of steps in GPO training."},
+    )
+    gpo_random_explore: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to random explore the trajectory in GPO training."},
+    )
 
 
 @dataclass
