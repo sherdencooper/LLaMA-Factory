@@ -262,7 +262,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                     for i in range(len(mini_batch_queries)):
                         if mini_batch_rewards[i] < 1:
                             print("Running GPO Exploration")
-                            mini_batch_queries[i], mini_batch_responses[i] = self.go_and_explore(mini_batch_queries[i], mini_batch_responses[i], mini_batch_labels[i])
+                            mini_batch_queries[i], mini_batch_responses[i], mini_batch_rewards[i] = self.go_and_explore(mini_batch_queries[i], mini_batch_responses[i], mini_batch_rewards[i], mini_batch_labels[i])
                         
                 queries.extend(mini_batch_queries)
                 responses.extend(mini_batch_responses)
@@ -440,7 +440,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         return rewards.float().detach()  # use fp32 type
     
     @torch.no_grad()
-    def go_and_explore(self, query: torch.Tensor, response: torch.Tensor, label: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def go_and_explore(self, query: torch.Tensor, response: torch.Tensor, reward: torch.Tensor, label: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""Go and explore the trajectory with parallel step processing."""
         MAX_STEPS = self.finetuning_args.gpo_max_steps
         MIN_STEP_LENGTH = 30
@@ -476,7 +476,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             steps.append((current_step_start, len(response_list) - 1))
 
         if len(steps) == 0:
-            return query, response
+            return query, response, reward
 
         # Create a modified generation config for batch generation
         batch_generation_config = GenerationConfig(
@@ -619,9 +619,10 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             # concat the partial response in the best step
             partial_response = response[:steps[best_step_idx][0]]
             best_response = torch.cat([partial_response, remove_pad_response], dim=0)
-            return query, best_response
+            best_reward = best_rewards_per_step[best_step_idx]
+            return query, best_response, best_reward
         else:
-            return query, response
+            return query, response, reward
 
     @override
     @PPODecorators.empty_device_cache()
