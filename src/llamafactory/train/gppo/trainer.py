@@ -609,13 +609,16 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             # remove the padding from the best response, note that sometimes the pad token is also the eos token
             print(f"Best step index: {best_step_idx}")
             print(f"Best average reward: {best_rewards_per_step[best_step_idx]}")
-            for i in range(len(best_responses_per_step[best_step_idx])):
-                if best_responses_per_step[best_step_idx][i] == self.tokenizer.pad_token_id:
-                    if self.tokenizer.eos_token_id == self.tokenizer.pad_token_id:
-                        remove_pad_response = best_responses_per_step[best_step_idx][:i+1]
-                    else:
-                        remove_pad_response = best_responses_per_step[best_step_idx][:i]
-                    break
+            response_indexes = (best_responses_per_step[best_step_idx] != self.tokenizer.pad_token_id).nonzero()
+
+            if len(response_indexes) == 0:  # allow empty response
+                response_length = 1
+            elif self.tokenizer.eos_token_id == self.tokenizer.pad_token_id:  # include eos token
+                response_length = response_indexes[-1].item() + 2
+            else:
+                response_length = response_indexes[-1].item() + 1
+            remove_pad_response = best_responses_per_step[best_step_idx][:response_length]
+            
             # concat the partial response in the best step
             partial_response = response[:steps[best_step_idx][0]]
             best_response = torch.cat([partial_response, remove_pad_response], dim=0)
