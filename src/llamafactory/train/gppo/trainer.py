@@ -441,18 +441,19 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
     
     @torch.no_grad()
     def go_and_explore(self, query: torch.Tensor, response: torch.Tensor, label: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        r"""Go and explore the trajectory."""
+        r"""Go and explore the trajectory with parallel step processing."""
         MAX_STEPS = self.finetuning_args.gpo_max_steps
-        MIN_STEP_LENGTH = 30 
+        MIN_STEP_LENGTH = 30
         NUM_EXPLORATIONS = self.finetuning_args.gpo_explore_num
-        
+        NUM_STEP_PARALLEL = self.finetuning_args.gpo_step_parallel  # Number of steps to process in parallel
+
         response_list = response.tolist()
         step_indices = [i for i, token_id in enumerate(response_list) if token_id in self.newline_token_id]
-        
+
         # Initialize steps
         steps = []
         current_step_start = 0
-        
+
         # Group by newlines, ensuring minimum step length
         for i, idx in enumerate(step_indices):
             # If we've reached the maximum number of steps, group the rest
@@ -473,19 +474,20 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         # Add the final step if needed
         if current_step_start < len(response_list) and len(steps) < MAX_STEPS:
             steps.append((current_step_start, len(response_list) - 1))
-            
+
         if len(steps) == 0:
             return query, response
-        
+
         # Create a modified generation config for batch generation
         batch_generation_config = GenerationConfig(
             **self.generation_config.to_dict(),
         )
         batch_generation_config.num_return_sequences = NUM_EXPLORATIONS
         batch_generation_config.do_sample = True  # Ensure diversity in generated sequences
-        
-        print("There are {} steps to explore".format(len(steps)))
+
+        print(f"There are {len(steps)} steps to explore")
         start_time = time.time()
+
         # Unwrap model once for all generations
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
             unwrapped_model: AutoModelForCausalLMWithValueHead = self.accelerator.unwrap_model(self.model)
@@ -498,81 +500,126 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             best_responses_per_step = {}
             best_rewards_per_step = {}
 
-            # Explore from each step
-            for step_idx, (step_start, step_end) in enumerate(steps):
-                # Create input for generation: query + partial response up to this step
-                partial_response = response[:step_end+1]
-                input_tensor = torch.cat([query, partial_response], dim=0).unsqueeze(0)
+            # Process steps in parallel batches
+            for batch_start in range(0, len(steps), NUM_STEP_PARALLEL):
+                batch_end = min(batch_start + NUM_STEP_PARALLEL, len(steps))
+                current_batch_steps = steps[batch_start:batch_end]
 
-                # Create attention mask
-                attention_mask = torch.ones_like(input_tensor)
+                # Prepare inputs for all steps in this batch
+                batch_inputs = []
+                max_length = 0
+                for step_start, step_end in current_batch_steps:
+                    partial_response = response[:step_start]
+                    input_tensor = torch.cat([query, partial_response], dim=0).unsqueeze(0)
+                    max_length = max(max_length, input_tensor.size(1))
+
+                # Create padded inputs
+                for step_start, step_end in current_batch_steps:
+                    partial_response = response[:step_start]
+                    input_tensor = torch.cat([query, partial_response], dim=0)
+
+                    # Pad to max_length
+                    pad_length = max_length - input_tensor.size(0)
+                    if pad_length > 0:
+                        padding = torch.full((pad_length,), self.tokenizer.pad_token_id, dtype=input_tensor.dtype)
+                        input_tensor = torch.cat([padding, input_tensor], dim=0)
+
+                    # Add to batch (no need to repeat)
+                    batch_inputs.append(input_tensor.unsqueeze(0))
+
+                # Concatenate all inputs into a single batch
+                batch_size = len(current_batch_steps)
+                if batch_size == 0:
+                    continue
+                
+                combined_inputs = torch.cat(batch_inputs, dim=0)
+                attention_mask = (combined_inputs != self.tokenizer.pad_token_id).long()
 
                 # Prepare batch for generation
                 batch = {
-                    "input_ids": input_tensor,
+                    "input_ids": combined_inputs,
                     "attention_mask": attention_mask
                 }
-                
-                # send the batch to self.model's device
+
+                # Send the batch to the model's device
                 batch = {k: v.to(self.model.device) for k, v in batch.items()}
 
-                # Generate multiple continuations in a single batch
-                generate_output: torch.Tensor = unwrapped_model.generate(
+                # Generate continuations for all steps in this batch
+                generate_output = unwrapped_model.generate(
                     generation_config=batch_generation_config,
                     logits_processor=get_logits_processor(),
                     **batch
                 )
 
-                # Process all generated sequences
-                step_rewards = []
-                step_best_reward = 0.0
-                step_best_response = None
+                # Process the results for each step
+                for batch_idx, (step_idx, (step_start, step_end)) in enumerate(zip(range(batch_start, batch_end), current_batch_steps)):
+                    step_rewards = []
+                    step_best_reward = 0.0
+                    step_best_response = None
 
-                # The output shape will be [num_return_sequences, sequence_length]
-                for seq_idx in range(NUM_EXPLORATIONS):
-                    # Extract the generated continuation
-                    new_response = generate_output[seq_idx, input_tensor.size(1):].detach().cpu()
+                    # Process each exploration for this step
+                    for exp_idx in range(NUM_EXPLORATIONS):
+                        output_idx = batch_idx * NUM_EXPLORATIONS + exp_idx
+                        input_length = combined_inputs[batch_idx].size(0)
 
-                    # Evaluate the reward for this continuation
-                    new_rewards = self.get_rewards([query], [new_response], label.unsqueeze(0) if label is not None else None)
-                    new_reward = new_rewards[0].item()
-                    step_rewards.append(new_reward)
+                        # Extract the generated continuation
+                        new_response = generate_output[output_idx, input_length:].detach().cpu()
 
-                    # Track best response for this step
-                    if new_reward > step_best_reward:
-                        step_best_reward = new_reward
-                        step_best_response = new_response
+                        # Evaluate the reward for this continuation
+                        new_rewards = self.get_rewards([query], [new_response], label.unsqueeze(0) if label is not None else None)
+                        new_reward = new_rewards[0].item()
+                        step_rewards.append(new_reward)
 
-                # Calculate average reward for this step
-                step_avg_reward = sum(step_rewards) / len(step_rewards) if step_rewards else 0
+                        # Track best response for this step
+                        if new_reward > step_best_reward:
+                            step_best_reward = new_reward
+                            step_best_response = new_response
 
-                # Store best response and reward for this step
-                best_responses_per_step[step_idx] = step_best_response
-                best_rewards_per_step[step_idx] = step_best_reward
+                    # Calculate average reward for this step
+                    step_avg_reward = sum(step_rewards) / len(step_rewards) if step_rewards else 0
 
-                # Track step with highest average reward
-                if step_avg_reward > best_step_avg_reward:
-                    best_step_avg_reward = step_avg_reward
-                    best_step_idx = step_idx
-                
-                # early terminate if the average reward is greater than 1
-                if step_avg_reward >= 1:
-                    break
-                
+                    # Store best response and reward for this step
+                    best_responses_per_step[step_idx] = step_best_response
+                    best_rewards_per_step[step_idx] = step_best_reward
+
+                    # Track step with highest average reward
+                    if step_avg_reward > best_step_avg_reward:
+                        best_step_avg_reward = step_avg_reward
+                        best_step_idx = step_idx
+
+                # Check time limit
                 end_time = time.time()
                 if end_time - start_time > self.finetuning_args.gpo_max_time:
                     print("Time limit reached, early terminating")
                     break
 
+                # Check if we found a very good reward
+                if best_step_avg_reward >= 1:
+                    print(f"Found excellent reward {best_step_avg_reward}, early terminating")
+                    break
+
             # Restore layernorm parameters
             if self.model_args.upcast_layernorm:
                 restore_layernorm(unwrapped_model, layernorm_params)
-                
+
         print("Exploration finished")
 
         # If we found a better step with positive reward, return its best response
         if best_step_idx >= 0 and best_rewards_per_step[best_step_idx] > 0:
-            return query, best_responses_per_step[best_step_idx]
+            # remove the padding from the best response, note that sometimes the pad token is also the eos token
+            print(f"Best step index: {best_step_idx}")
+            print(f"Best average reward: {best_rewards_per_step[best_step_idx]}")
+            for i in range(len(best_responses_per_step[best_step_idx])):
+                if best_responses_per_step[best_step_idx][i] == self.tokenizer.pad_token_id:
+                    if self.tokenizer.eos_token_id == self.tokenizer.pad_token_id:
+                        remove_pad_response = best_responses_per_step[best_step_idx][:i+1]
+                    else:
+                        remove_pad_response = best_responses_per_step[best_step_idx][:i]
+                    break
+            # concat the partial response in the best step
+            partial_response = response[:steps[best_step_idx][0]]
+            best_response = torch.cat([partial_response, remove_pad_response], dim=0)
+            return query, best_response
         else:
             return query, response
 

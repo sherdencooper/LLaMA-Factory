@@ -222,6 +222,10 @@ class RLHFArguments:
         default=200,
         metadata={"help": "The maximum time in GPO exploration."},
     )
+    gpo_step_parallel: Optional[int] = field(
+        default=4,
+        metadata={"help": "The number of steps to parallelize in GPO training."},
+    )
 
 
 @dataclass
