@@ -42,7 +42,7 @@ from ...extras.misc import AverageMeter, count_parameters, get_current_device, g
 from ..callbacks import FixValueHeadModelCallback, SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
 from .ppo_utils import dump_layernorm, get_rewards_from_server, replace_model, restore_layernorm, get_rewards_from_rule
-
+import time
 
 if TYPE_CHECKING:
     from datasets import Dataset
@@ -485,7 +485,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         batch_generation_config.do_sample = True  # Ensure diversity in generated sequences
         
         print("There are {} steps to explore".format(len(steps)))
-        
+        start_time = time.time()
         # Unwrap model once for all generations
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
             unwrapped_model: AutoModelForCausalLMWithValueHead = self.accelerator.unwrap_model(self.model)
@@ -557,6 +557,11 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 
                 # early terminate if the average reward is greater than 1
                 if step_avg_reward >= 1:
+                    break
+                
+                end_time = time.time()
+                if end_time - start_time > self.finetuning_args.gpo_max_time:
+                    print("Time limit reached, early terminating")
                     break
 
             # Restore layernorm parameters

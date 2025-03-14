@@ -218,6 +218,10 @@ class RLHFArguments:
         default=False,
         metadata={"help": "Whether or not to random explore the trajectory in GPO training."},
     )
+    gpo_max_time: Optional[int] = field(
+        default=200,
+        metadata={"help": "The maximum time in GPO exploration."},
+    )
 
 
 @dataclass
