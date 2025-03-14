@@ -256,6 +256,8 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 else:
                     mini_batch_labels = None
                 mini_batch_rewards = self.get_rewards(mini_batch_queries, mini_batch_responses, mini_batch_labels)
+                # print how many trajectories with reward smaller than 1
+                print("There are {} trajectories to explore".format(sum(mini_batch_rewards < 1)))
                 if self.finetuning_args.gpo_explore_trajectory:
                     for i in range(len(mini_batch_queries)):
                         if mini_batch_rewards[i] < 1:
@@ -475,6 +477,15 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
         if len(steps) == 0:
             return query, response
         
+        # Create a modified generation config for batch generation
+        batch_generation_config = GenerationConfig(
+            **self.generation_config.to_dict(),
+        )
+        batch_generation_config.num_return_sequences = NUM_EXPLORATIONS
+        batch_generation_config.do_sample = True  # Ensure diversity in generated sequences
+        
+        print("There are {} steps to explore".format(len(steps)))
+        
         # Unwrap model once for all generations
         with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
             unwrapped_model: AutoModelForCausalLMWithValueHead = self.accelerator.unwrap_model(self.model)
@@ -490,7 +501,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             # Explore from each step
             for step_idx, (step_start, step_end) in enumerate(steps):
                 # Create input for generation: query + partial response up to this step
-                partial_response = response[:step_start]
+                partial_response = response[:step_end+1]
                 input_tensor = torch.cat([query, partial_response], dim=0).unsqueeze(0)
 
                 # Create attention mask
@@ -505,21 +516,22 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 # send the batch to self.model's device
                 batch = {k: v.to(self.model.device) for k, v in batch.items()}
 
-                # Track rewards for this step
+                # Generate multiple continuations in a single batch
+                generate_output: torch.Tensor = unwrapped_model.generate(
+                    generation_config=batch_generation_config,
+                    logits_processor=get_logits_processor(),
+                    **batch
+                )
+
+                # Process all generated sequences
                 step_rewards = []
                 step_best_reward = 0.0
                 step_best_response = None
 
-                # Generate multiple continuations from this step
-                for _ in range(NUM_EXPLORATIONS):
-                    generate_output: torch.Tensor = unwrapped_model.generate(
-                        generation_config=self.generation_config,
-                        logits_processor=get_logits_processor(),
-                        **batch
-                    )
-
+                # The output shape will be [num_return_sequences, sequence_length]
+                for seq_idx in range(NUM_EXPLORATIONS):
                     # Extract the generated continuation
-                    new_response = generate_output[0, input_tensor.size(1):].detach().cpu()
+                    new_response = generate_output[seq_idx, input_tensor.size(1):].detach().cpu()
 
                     # Evaluate the reward for this continuation
                     new_rewards = self.get_rewards([query], [new_response], label.unsqueeze(0) if label is not None else None)
@@ -543,13 +555,15 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                     best_step_avg_reward = step_avg_reward
                     best_step_idx = step_idx
                 
-                # Early stop if the highest average reward is 1
-                if best_step_avg_reward >= 1:
+                # early terminate if the average reward is greater than 1
+                if step_avg_reward >= 1:
                     break
 
             # Restore layernorm parameters
             if self.model_args.upcast_layernorm:
                 restore_layernorm(unwrapped_model, layernorm_params)
+                
+        print("Exploration finished")
 
         # If we found a better step with positive reward, return its best response
         if best_step_idx >= 0 and best_rewards_per_step[best_step_idx] > 0:
