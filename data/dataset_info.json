@@ -705,5 +705,21 @@
     "columns": {
       "messages": "conversations"
     }
+  },
+  "kto_bbh": {
+    "file_name": "kto_bbh.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "kto_tag": "kto_tag"
+    }
+  },
+  "kto_gpo_bbh": {
+    "file_name": "kto_gpo_bbh.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "kto_tag": "kto_tag"
+    }
   }
 }
