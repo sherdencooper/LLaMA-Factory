@@ -699,6 +699,16 @@
       "rejected": "rejected"
     }
   },
+  "bbh_gpo_dpo_random": {
+    "file_name": "random_gpo_bbh_dpo_pairs.json",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
+  },
   "bbh_ppo": {
     "file_name": "ppo_dataset.json",
     "formatting": "sharegpt",
