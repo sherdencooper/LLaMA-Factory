@@ -43,7 +43,7 @@ from ..callbacks import FixValueHeadModelCallback, SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
 from .ppo_utils import dump_layernorm, get_rewards_from_server, replace_model, restore_layernorm, get_rewards_from_rule
 import time
-
+import random
 if TYPE_CHECKING:
     from datasets import Dataset
     from transformers import (
@@ -634,7 +634,94 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
     @torch.no_grad()
     def go_and_explore_random(self, query: torch.Tensor, response: torch.Tensor, reward: torch.Tensor, label: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         r"""Randomly select the important trajectory in GPO training."""
-        
+        MIN_STEP_LENGTH = 30
+
+        response_list = response.tolist()
+        step_indices = [i for i, token_id in enumerate(response_list) if token_id in self.newline_token_id]
+
+        # Initialize steps
+        steps = []
+        current_step_start = 0
+
+        # Group by newlines, ensuring minimum step length
+        for i, idx in enumerate(step_indices):
+            step_length = idx - current_step_start
+
+            # If step is too short, continue to next newline
+            if step_length < MIN_STEP_LENGTH and i < len(step_indices) - 1:
+                continue
+
+            # Add the step
+            steps.append((current_step_start, idx))
+            current_step_start = idx + 1
+
+        # Add the final step if needed
+        if current_step_start < len(response_list):
+            steps.append((current_step_start, len(response_list) - 1))
+
+        if len(steps) == 0:
+            return query, response, reward
+
+        # Randomly select one step
+        random_step_idx = random.randint(0, len(steps) - 1)
+        step_start, step_end = steps[random_step_idx]
+
+        print(f"Randomly selected step {random_step_idx} out of {len(steps)} steps")
+
+        # Create generation config for single exploration
+        generation_config = GenerationConfig(
+            **self.generation_config.to_dict(),
+        )
+        generation_config.num_return_sequences = 1
+        generation_config.do_sample = True
+
+        # Unwrap model for generation
+        with unwrap_model_for_generation(self.model, self.accelerator) as unwrapped_model:
+            unwrapped_model: AutoModelForCausalLMWithValueHead = self.accelerator.unwrap_model(self.model)
+            if self.model_args.upcast_layernorm:
+                layernorm_params = dump_layernorm(unwrapped_model)
+
+            # Prepare input for the selected step
+            partial_response = response[:step_start]
+            input_tensor = torch.cat([query, partial_response], dim=0).unsqueeze(0)
+
+            # Generate continuation for the selected step
+            generate_output = unwrapped_model.generate(
+                input_ids=input_tensor.to(self.model.device),
+                attention_mask=torch.ones_like(input_tensor).to(self.model.device),
+                generation_config=generation_config,
+                logits_processor=get_logits_processor()
+            )
+
+            # Extract the generated continuation
+            input_length = input_tensor.size(1)
+            new_response = generate_output[0, input_length:].detach().cpu()
+
+            # Evaluate the reward for this continuation
+            new_rewards = self.get_rewards([query], [new_response], label.unsqueeze(0) if label is not None else None)
+            new_reward = new_rewards[0].item()
+
+            # Restore layernorm parameters
+            if self.model_args.upcast_layernorm:
+                restore_layernorm(unwrapped_model, layernorm_params)
+
+        print(f"Random exploration finished with reward: {new_reward}")
+
+        # Remove padding from the response
+        response_indexes = (new_response != self.tokenizer.pad_token_id).nonzero()
+        if len(response_indexes) == 0:  # allow empty response
+            response_length = 1
+        elif self.tokenizer.eos_token_id == self.tokenizer.pad_token_id:  # include eos token
+            response_length = response_indexes[-1].item() + 2
+        else:
+            response_length = response_indexes[-1].item() + 1
+
+        remove_pad_response = new_response[:response_length]
+
+        # Concatenate the partial response with the new continuation
+        best_response = torch.cat([partial_response, remove_pad_response], dim=0)
+
+        return query, best_response, new_reward
 
     @override
     @PPODecorators.empty_device_cache()
