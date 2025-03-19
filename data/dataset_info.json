@@ -731,5 +731,12 @@
       "messages": "conversations",
       "kto_tag": "kto_tag"
     }
-  }
+  },
+  "kto_gpo_bbh_random": {
+    "file_name": "./BBH/random_gpo_bbh_kto.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "kto_tag": "kto_tag"
+    }
 }
