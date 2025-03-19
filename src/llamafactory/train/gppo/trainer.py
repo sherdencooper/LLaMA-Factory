@@ -261,8 +261,12 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 if self.finetuning_args.gpo_explore_trajectory:
                     for i in range(len(mini_batch_queries)):
                         if mini_batch_rewards[i] < 1:
-                            print("Running GPO Exploration")
-                            mini_batch_queries[i], mini_batch_responses[i], mini_batch_rewards[i] = self.go_and_explore(mini_batch_queries[i], mini_batch_responses[i], mini_batch_rewards[i], mini_batch_labels[i])
+                            if not self.finetuning_args.gpo_random_explore:
+                                print("Running GPO Exploration")
+                                mini_batch_queries[i], mini_batch_responses[i], mini_batch_rewards[i] = self.go_and_explore(mini_batch_queries[i], mini_batch_responses[i], mini_batch_rewards[i], mini_batch_labels[i])
+                            else:
+                                print("Running GPO Random Exploration")
+                                mini_batch_queries[i], mini_batch_responses[i], mini_batch_rewards[i] = self.go_and_explore_random(mini_batch_queries[i], mini_batch_responses[i], mini_batch_rewards[i], mini_batch_labels[i])
                         
                 queries.extend(mini_batch_queries)
                 responses.extend(mini_batch_responses)
@@ -626,6 +630,11 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             return query, best_response, best_reward
         else:
             return query, response, reward
+        
+    @torch.no_grad()
+    def go_and_explore_random(self, query: torch.Tensor, response: torch.Tensor, reward: torch.Tensor, label: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        r"""Randomly select the important trajectory in GPO training."""
+        
 
     @override
     @PPODecorators.empty_device_cache()

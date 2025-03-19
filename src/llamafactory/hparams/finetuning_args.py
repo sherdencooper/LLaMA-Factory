@@ -226,6 +226,10 @@ class RLHFArguments:
         default=4,
         metadata={"help": "The number of steps to parallelize in GPO training."},
     )
+    gpo_random_explore: Optional[bool] = field(
+        default=False,
+        metadata={"help": "Whether or not to random select the important trajectory in GPO training."},
+    )
 
 
 @dataclass
