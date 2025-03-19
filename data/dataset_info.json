@@ -680,7 +680,7 @@
     "folder": "python"
   },
   "bbh_dpo": {
-    "file_name": "dpo_bbh_dpo_pairs.json",
+    "file_name": "./BBH/dpo_bbh_dpo_pairs.json",
     "formatting": "sharegpt",
     "ranking": true,
     "columns": {
@@ -690,7 +690,7 @@
     }
   },
   "bbh_gpo_dpo": {
-    "file_name": "gpo_bbh_dpo_pairs.json",
+    "file_name": "./BBH/gpo_bbh_dpo_pairs.json",
     "formatting": "sharegpt",
     "ranking": true,
     "columns": {
@@ -700,7 +700,7 @@
     }
   },
   "bbh_gpo_dpo_random": {
-    "file_name": "random_gpo_bbh_dpo_pairs.json",
+    "file_name": "./BBH/random_gpo_bbh_dpo_pairs.json",
     "formatting": "sharegpt",
     "ranking": true,
     "columns": {
@@ -710,14 +710,14 @@
     }
   },
   "bbh_ppo": {
-    "file_name": "ppo_dataset.json",
+    "file_name": "./BBH/ppo_dataset.json",
     "formatting": "sharegpt",
     "columns": {
       "messages": "conversations"
     }
   },
   "kto_bbh": {
-    "file_name": "kto_bbh.json",
+    "file_name": "./BBH/kto_bbh.json",
     "formatting": "sharegpt",
     "columns": {
       "messages": "conversations",
@@ -725,7 +725,7 @@
     }
   },
   "kto_gpo_bbh": {
-    "file_name": "kto_gpo_bbh.json",
+    "file_name": "./BBH/kto_gpo_bbh.json",
     "formatting": "sharegpt",
     "columns": {
       "messages": "conversations",
