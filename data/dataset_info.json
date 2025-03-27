@@ -739,5 +739,25 @@
       "messages": "conversations",
       "kto_tag": "kto_tag"
     }
-  }
+  },
+  "math_dpo": {
+    "file_name": "./MATH/dpo_MATH.json",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
+  },
+  "math_gpo_dpo": {
+    "file_name": "./MATH/gpo_MATH.json",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
+  },
 }
