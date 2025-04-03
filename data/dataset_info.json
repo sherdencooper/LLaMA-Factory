@@ -759,5 +759,12 @@
       "chosen": "chosen",
       "rejected": "rejected"
     }
+  },
+  "math_ppo": {
+    "file_name": "./MATH/ppo_MATH.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations"
+    }
   }
 }
