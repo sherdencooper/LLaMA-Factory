@@ -186,31 +186,61 @@ class SharegptDatasetConverter(DatasetConverter):
                 response = response + [{"role": Role.ASSISTANT.value, "content": ""}]
             else:
                 response = [{"role": Role.ASSISTANT.value, "content": ""}] + response
-        elif (
-            self.dataset_attr.ranking
-            and isinstance(example[self.dataset_attr.chosen], dict)
-            and isinstance(example[self.dataset_attr.rejected], dict)
+        elif self.dataset_attr.ranking and (
+            (isinstance(example[self.dataset_attr.chosen], dict) and isinstance(example[self.dataset_attr.rejected], dict))
+            or (isinstance(example[self.dataset_attr.chosen], list) and isinstance(example[self.dataset_attr.rejected], list))
         ):  # pairwise example
             chosen = example[self.dataset_attr.chosen]
             rejected = example[self.dataset_attr.rejected]
-            if (
-                chosen[self.dataset_attr.role_tag] not in accept_tags[-1]
-                or rejected[self.dataset_attr.role_tag] not in accept_tags[-1]
-            ):
-                logger.warning_rank0(f"Invalid role tag in {[chosen, rejected]}.")
-                broken_data = True
+            
+            # Handle multi-turn chosen/rejected (lists of conversation turns)
+            if isinstance(chosen, list) and isinstance(rejected, list):
+                # Convert chosen conversation turns
+                chosen_turns = []
+                for turn in chosen:
+                    if turn[self.dataset_attr.role_tag] not in tag_mapping:
+                        logger.warning_rank0(f"Invalid role tag in chosen: {turn}")
+                        broken_data = True
+                        break
+                    chosen_turns.append({
+                        "role": tag_mapping[turn[self.dataset_attr.role_tag]],
+                        "content": turn[self.dataset_attr.content_tag],
+                    })
+                # Convert rejected conversation turns
+                rejected_turns = []
+                for turn in rejected:
+                    if turn[self.dataset_attr.role_tag] not in tag_mapping:
+                        logger.warning_rank0(f"Invalid role tag in rejected: {turn}")
+                        broken_data = True
+                        break
+                    rejected_turns.append({
+                        "role": tag_mapping[turn[self.dataset_attr.role_tag]],
+                        "content": turn[self.dataset_attr.content_tag],
+                    })
+                
+                prompt = aligned_messages
+                response = [chosen_turns, rejected_turns]  # List of two conversation continuations
+                
+            else:
+                # Handle single-turn chosen/rejected (original behavior)
+                if (
+                    chosen[self.dataset_attr.role_tag] not in accept_tags[-1]
+                    or rejected[self.dataset_attr.role_tag] not in accept_tags[-1]
+                ):
+                    logger.warning_rank0(f"Invalid role tag in {[chosen, rejected]}.")
+                    broken_data = True
 
-            prompt = aligned_messages
-            response = [
-                {
-                    "role": tag_mapping[chosen[self.dataset_attr.role_tag]],
-                    "content": chosen[self.dataset_attr.content_tag],
-                },
-                {
-                    "role": tag_mapping[rejected[self.dataset_attr.role_tag]],
-                    "content": rejected[self.dataset_attr.content_tag],
-                },
-            ]
+                prompt = aligned_messages
+                response = [
+                    {
+                        "role": tag_mapping[chosen[self.dataset_attr.role_tag]],
+                        "content": chosen[self.dataset_attr.content_tag],
+                    },
+                    {
+                        "role": tag_mapping[rejected[self.dataset_attr.role_tag]],
+                        "content": rejected[self.dataset_attr.content_tag],
+                    },
+                ]
         else:  # normal example
             prompt = aligned_messages[:-1]
             response = aligned_messages[-1:]

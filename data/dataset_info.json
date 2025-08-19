@@ -714,5 +714,38 @@
       "prompt": "content"
     },
     "folder": "python"
+  },
+  "r2e_smith_sft": {
+    "file_name": "/projects/p32304/Code-LLM/dataset/sft_data_sharegpt.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations"
+    }
+  },
+  "qwen_r2e_kto": {
+    "file_name": "/projects/p32304/Code-LLM/dataset/qwen_kto_data.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "kto_tag": "kto_tag"
+    }
+  },
+  "qwen_r2e_dpo": {
+    "file_name": "/projects/p32304/Code-LLM/dataset/qwen_dpo_data.json",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "messages": "conversations",
+      "chosen": "chosen",
+      "rejected": "rejected"
+    }
+  },
+  "glmair_r2e_kto": {
+    "file_name": "/projects/p32304/Code-LLM/dataset/glmair_kto_data.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations",
+      "kto_tag": "kto_tag"
+    }
   }
 }

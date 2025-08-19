@@ -257,6 +257,15 @@ class RLHFArguments:
             )
         },
     )
+    entro_alpha: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Alpha parameter from the EntroPO paper, which controls the weighting of"
+                " the entropy of the response in responses."
+            )
+        },
+    )
 
 
 @dataclass

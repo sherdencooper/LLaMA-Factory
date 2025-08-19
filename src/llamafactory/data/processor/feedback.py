@@ -28,6 +28,83 @@ logger = logging.get_logger(__name__)
 
 
 class FeedbackDatasetProcessor(DatasetProcessor):
+    def _encode_data_example_multi_turn(
+        self,
+        prompt: list[dict[str, str]],
+        response: list[dict[str, str]],
+        kl_response: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+    ) -> tuple[list[int], list[int], list[int], list[int], bool]:
+        """Multi-turn KTO encoding that masks only user messages."""
+        if response[0]["content"]:  # desired example
+            kto_tag = True
+            messages = prompt + [response[0]]
+        else:  # undesired example
+            kto_tag = False
+            messages = prompt + [response[1]]
+
+        if kl_response[0]["content"]:
+            kl_messages = prompt + [kl_response[0]]
+        else:
+            kl_messages = prompt + [kl_response[1]]
+
+        messages = self.template.mm_plugin.process_messages(messages, images, videos, audios, self.processor)
+        kl_messages = self.template.mm_plugin.process_messages(kl_messages, images, videos, audios, self.processor)
+        
+        # Use encode_multiturn for proper multi-turn handling
+        encoded_pairs = self.template.encode_multiturn(self.tokenizer, messages, system, tools)
+        kl_encoded_pairs = self.template.encode_multiturn(self.tokenizer, kl_messages, system, tools)
+
+        # Process pairs with multi-turn masking (only mask user messages)
+        input_ids, labels = self._process_multiturn_pairs_kto(encoded_pairs)
+        kl_input_ids, kl_labels = self._process_multiturn_pairs_kto(kl_encoded_pairs)
+        
+        # Apply multimedia processing
+        input_ids, _ = self.template.mm_plugin.process_token_ids(
+            input_ids, None, images, videos, audios, self.tokenizer, self.processor
+        )
+        kl_input_ids, _ = self.template.mm_plugin.process_token_ids(
+            kl_input_ids, None, images, videos, audios, self.tokenizer, self.processor
+        )
+        
+        # Apply sequence length constraints
+        max_len = max(len(input_ids), len(kl_input_ids))
+        source_len, target_len = infer_seqlen(0, max_len, self.data_args.cutoff_len)
+        
+        input_ids = input_ids[:target_len]
+        labels = labels[:target_len]
+        kl_input_ids = kl_input_ids[:target_len]
+        kl_labels = kl_labels[:target_len]
+        
+        return input_ids, labels, kl_input_ids, kl_labels, kto_tag
+
+    def _process_multiturn_pairs_kto(self, encoded_pairs: list) -> tuple[list[int], list[int]]:
+        """Process multi-turn pairs for KTO: mask only user messages, train on all assistant responses."""
+        input_ids, labels = [], []
+        
+        for turn_idx, (source_ids, target_ids) in enumerate(encoded_pairs):
+            # Always mask user messages (source_ids)
+            if self.template.efficient_eos and turn_idx != 0:
+                source_label = [self.tokenizer.eos_token_id] + [IGNORE_INDEX] * (len(source_ids) - 1)
+            else:
+                source_label = [IGNORE_INDEX] * len(source_ids)
+            
+            # Keep all assistant responses for training (unlike DPO, don't mask any assistant responses)
+            target_label = target_ids
+                
+            input_ids.extend(source_ids + target_ids)
+            labels.extend(source_label + target_label)
+        
+        if self.template.efficient_eos:
+            input_ids.append(self.tokenizer.eos_token_id)
+            labels.append(self.tokenizer.eos_token_id)
+            
+        return input_ids, labels
+
     def _encode_data_example(
         self,
         prompt: list[dict[str, str]],
@@ -93,16 +170,30 @@ class FeedbackDatasetProcessor(DatasetProcessor):
                 )
                 continue
 
-            input_ids, labels, kl_input_ids, kl_labels, kto_tag = self._encode_data_example(
-                prompt=examples["_prompt"][i],
-                response=examples["_response"][i],
-                kl_response=kl_response[i],
-                system=examples["_system"][i],
-                tools=examples["_tools"][i],
-                images=examples["_images"][i] or [],
-                videos=examples["_videos"][i] or [],
-                audios=examples["_audios"][i] or [],
-            )
+            if getattr(self.data_args, 'multi_turn_kto', False):
+                # Use multi-turn KTO encoding
+                input_ids, labels, kl_input_ids, kl_labels, kto_tag = self._encode_data_example_multi_turn(
+                    prompt=examples["_prompt"][i],
+                    response=examples["_response"][i],
+                    kl_response=kl_response[i],
+                    system=examples["_system"][i],
+                    tools=examples["_tools"][i],
+                    images=examples["_images"][i] or [],
+                    videos=examples["_videos"][i] or [],
+                    audios=examples["_audios"][i] or [],
+                )
+            else:
+                # Use original single-turn KTO encoding
+                input_ids, labels, kl_input_ids, kl_labels, kto_tag = self._encode_data_example(
+                    prompt=examples["_prompt"][i],
+                    response=examples["_response"][i],
+                    kl_response=kl_response[i],
+                    system=examples["_system"][i],
+                    tools=examples["_tools"][i],
+                    images=examples["_images"][i] or [],
+                    videos=examples["_videos"][i] or [],
+                    audios=examples["_audios"][i] or [],
+                )
             model_inputs["input_ids"].append(input_ids)
             model_inputs["attention_mask"].append([1] * len(input_ids))
             model_inputs["labels"].append(labels)

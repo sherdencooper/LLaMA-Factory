@@ -82,6 +82,7 @@ class CustomDPOTrainer(DPOTrainer):
         self.label_smoothing = finetuning_args.dpo_label_smoothing
         self.simpo_gamma = finetuning_args.simpo_gamma
         self.ld_alpha = finetuning_args.ld_alpha
+        self.entro_alpha = finetuning_args.entro_alpha
 
         Trainer.__init__(self, model=model, **kwargs)
         self.model_accepts_loss_kwargs = False  # overwrite trainer's default behavior
@@ -156,6 +157,33 @@ class CustomDPOTrainer(DPOTrainer):
         logits = pi_logratios - gamma_logratios
         simpo_loss = -F.logsigmoid(self.beta * logits)
         return simpo_loss
+    
+    def entropo_loss(
+        self,
+        policy_chosen_logps: "torch.Tensor",
+        policy_rejected_logps: "torch.Tensor",
+        reference_chosen_logps: "torch.Tensor",
+        reference_rejected_logps: "torch.Tensor",
+    ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+        r"""Computes the EntroPO loss."""
+        policy_logratios = policy_chosen_logps - policy_rejected_logps
+        reference_logratios = reference_chosen_logps - reference_rejected_logps
+
+        # The logits are:
+        # α * log(π/π_ref) - β * log(π_ref/π_ref) which is equivalent to
+        # α * policy_logratios - β * reference_logratios
+        # where α is entro_alpha and β is beta.
+        logits = self.entro_alpha * policy_logratios - self.beta * reference_logratios
+        losses = -F.logsigmoid(logits)
+
+        # The implicit reward is r(y) = α * log π(y) - β * log π_ref(y)
+        chosen_rewards = (
+            self.entro_alpha * policy_chosen_logps - self.beta * reference_chosen_logps
+        ).detach()
+        rejected_rewards = (
+            self.entro_alpha * policy_rejected_logps - self.beta * reference_rejected_logps
+        ).detach()
+        return losses, chosen_rewards, rejected_rewards
 
     def bco_loss(
         self,
@@ -195,9 +223,14 @@ class CustomDPOTrainer(DPOTrainer):
             chosen_rewards = self.beta * policy_chosen_logps.to(self.accelerator.device).detach()
             rejected_rewards = self.beta * policy_rejected_logps.to(self.accelerator.device).detach()
         else:
-            losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
-            )
+            if self.loss_type == "entropo":
+                losses, chosen_rewards, rejected_rewards = self.entropo_loss(
+                    policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+                )
+            else:
+                losses, chosen_rewards, rejected_rewards = self.dpo_loss(
+                    policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+                )
 
             if self.bco_gemma > 1e-6:
                 bco_losses = self.bco_loss(

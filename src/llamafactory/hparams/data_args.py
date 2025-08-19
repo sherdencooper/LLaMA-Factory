@@ -55,6 +55,10 @@ class DataArguments:
         default=False,
         metadata={"help": "Whether or not to mask the history and train on the last turn only."},
     )
+    multi_turn_kto: bool = field(
+        default=False,
+        metadata={"help": "Whether or not to enable multi-turn KTO mode (masks only user messages, trains on all assistant responses)."},
+    )
     streaming: bool = field(
         default=False,
         metadata={"help": "Enable dataset streaming."},

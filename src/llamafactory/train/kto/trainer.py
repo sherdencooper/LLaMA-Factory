@@ -31,6 +31,8 @@ from ...extras.constants import IGNORE_INDEX
 from ...extras.packages import is_transformers_version_greater_than
 from ..callbacks import SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, get_batch_logps, nested_detach
+import torch.nn.functional as F
+from typing import Tuple
 
 
 if TYPE_CHECKING:
@@ -77,6 +79,9 @@ class CustomKTOTrainer(KTOTrainer):
         self.desirable_weight = finetuning_args.kto_chosen_weight
         self.undesirable_weight = finetuning_args.kto_rejected_weight
         self.ftx_gamma = finetuning_args.pref_ftx
+        self.entro_alpha = finetuning_args.entro_alpha
+        if self.entro_alpha != None:
+            print(f"Using Entro-KTO with alpha={self.entro_alpha}")
 
         Trainer.__init__(self, model=model, **kwargs)
         self.model_accepts_loss_kwargs = False  # overwrite trainer's default behavior
@@ -202,6 +207,51 @@ class CustomKTOTrainer(KTOTrainer):
 
         return reference_chosen_logps, reference_rejected_logps, reference_kl_logps
 
+    def entropo_kto_loss(
+        self,
+        policy_chosen_logps: torch.FloatTensor,
+        policy_rejected_logps: torch.FloatTensor,
+        policy_KL_logps: torch.FloatTensor,
+        reference_chosen_logps: torch.FloatTensor,
+        reference_rejected_logps: torch.FloatTensor,
+        reference_KL_logps: torch.FloatTensor,
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+        """
+        Compute the EntroPO-KTO loss.
+        r(y) = α * log π(y) - β * log π_ref(y)
+        """
+        # for logging
+        kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+        kl = self.accelerator.gather(kl).mean().clamp(min=0)
+
+        kl_entropy = (self.entro_alpha * policy_KL_logps - self.beta * reference_KL_logps).mean().detach()
+        kl_entropy = self.accelerator.gather(kl_entropy).mean().clamp(min=0)
+
+        if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
+            chosen_logratios = policy_chosen_logps - reference_chosen_logps
+            chosen_losses = 1 - F.sigmoid(self.beta * (chosen_logratios - kl_entropy))
+            chosen_rewards = self.beta * chosen_logratios.detach()
+        else:
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            chosen_losses = torch.Tensor([]).to(self.accelerator.device)
+            chosen_rewards = torch.Tensor([]).to(self.accelerator.device)
+
+        if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
+            rejected_logratios = policy_rejected_logps - reference_rejected_logps
+            rejected_losses = 1 - F.sigmoid(self.beta * (kl_entropy - rejected_logratios))
+            rejected_rewards = self.beta * rejected_logratios.detach()
+        else:
+            # lists can't be empty -- if they are, then accelerate.gather will hang
+            rejected_losses = torch.Tensor([]).to(self.accelerator.device)
+            rejected_rewards = torch.Tensor([]).to(self.accelerator.device)
+
+        losses = torch.cat(
+            (self.desirable_weight * chosen_losses, self.undesirable_weight * rejected_losses),
+            0,
+        )
+
+        return losses, chosen_rewards, rejected_rewards, kl
+
     @override
     def get_batch_loss_metrics(
         self,
@@ -221,14 +271,24 @@ class CustomKTOTrainer(KTOTrainer):
         reference_chosen_logps, reference_rejected_logps, reference_kl_logps = self.compute_reference_log_probs(
             model, batch
         )
-        losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
-            policy_chosen_logps,
-            policy_rejected_logps,
-            policy_kl_logps,
-            reference_chosen_logps,
-            reference_rejected_logps,
-            reference_kl_logps,
-        )
+        if self.entro_alpha != None:
+            losses, chosen_rewards, rejected_rewards, kl = self.entropo_kto_loss(
+                policy_chosen_logps,
+                policy_rejected_logps,
+                policy_kl_logps,
+                reference_chosen_logps,
+                reference_rejected_logps,
+                reference_kl_logps,
+            )
+        else:
+            losses, chosen_rewards, rejected_rewards, kl = self.kto_loss(
+                policy_chosen_logps,
+                policy_rejected_logps,
+                policy_kl_logps,
+                reference_chosen_logps,
+                reference_rejected_logps,
+                reference_kl_logps,
+            )
         losses = losses.nanmean()
 
         if self.ftx_gamma > 1e-6 and len(policy_chosen_logps) > 0:  # remember to rescale
