@@ -722,6 +722,13 @@
       "messages": "conversations"
     }
   },
+  "qwen_verify_sft": {
+    "file_name": "/projects/p32304/Code-LLM/dataset/qwen_verify_data_sharegpt.json",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations"
+    }
+  },
   "qwen_r2e_kto": {
     "file_name": "/projects/p32304/Code-LLM/dataset/qwen_kto_data.json",
     "formatting": "sharegpt",
